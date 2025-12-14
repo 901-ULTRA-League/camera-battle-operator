@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "signaling-server.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/ws", "dest": "/signaling-server.js" },
+    { "src": "/(.*)", "dest": "/signaling-server.js" }
+  ]
+}

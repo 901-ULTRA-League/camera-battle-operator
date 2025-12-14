@@ -1,0 +1,15 @@
+{
+  "name": "cam-battle-coordinator",
+  "version": "1.0.0",
+  "description": "Camera Card Battle Operator with WebRTC and WebSocket signaling",
+  "scripts": {
+    "start": "node signaling-server.js",
+    "dev": "node signaling-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.17.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

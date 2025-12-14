@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Camera Card Battle Operator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/@emotion/react@11.11.1/dist/emotion-react.umd.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@emotion/styled@11.11.0/dist/emotion-styled.umd.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@mui/material@5.15.14/umd/material-ui.development.js"></script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      font-family: 'Space Grotesk', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: radial-gradient(circle at 20% 20%, #162447 0, #0b1021 40%), radial-gradient(circle at 80% 0%, rgba(93,226,231,0.08) 0, transparent 30%), #0b1021;
+      min-height: 100vh;
+    }
+    .video-shell {
+      position: relative;
+      overflow: hidden;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    video {
+      width: 100%;
+      height: 320px;
+      object-fit: cover;
+      background: #04060f;
+    }
+    .remote-video {
+      transform: scaleX(-1); /* Mirror so opponents face each other */
+    }
+    .glass {
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { ThemeProvider, createTheme, CssBaseline, Container, Box, Grid, Card, CardContent, Typography, Button, TextField, Stack, Chip, Paper, Divider, IconButton, Tooltip, List, ListItem, ListItemText, Avatar, Alert, Snackbar } = MaterialUI;
+
+    const theme = createTheme({
+      palette: {
+        mode: 'dark',
+        primary: { main: '#5de2e7' },
+        secondary: { main: '#ff7a90' },
+        background: { default: '#0b1021', paper: '#11162b' },
+        text: { primary: '#e8edf8', secondary: '#9fb2d0' },
+      },
+      typography: {
+        fontFamily: "'Space Grotesk', system-ui, sans-serif",
+        h4: { fontWeight: 700, letterSpacing: '-0.5px' },
+        h6: { fontWeight: 600 },
+        button: { textTransform: 'none', fontWeight: 700 },
+      },
+      shape: { borderRadius: 14 },
+      components: {
+        MuiPaper: { styleOverrides: { root: { backgroundImage: 'none' } } },
+        MuiCard: { styleOverrides: { root: { backgroundImage: 'none', border: '1px solid rgba(255,255,255,0.05)' } } },
+      },
+    });
+
+    function randomCode() {
+      return Math.random().toString(36).slice(2, 8).toUpperCase();
+    }
+
+    function StatusChip({ label, tone }) {
+      const color = tone === 'error' ? 'error' : tone === 'success' ? 'success' : tone === 'warning' ? 'warning' : 'info';
+      return <Chip label={label} color={color} size="small" variant="filled" />;
+    }
+
+    function App() {
+      const [name, setName] = React.useState('');
+      const [role, setRole] = React.useState(null);
+      const [roomCode, setRoomCode] = React.useState('');
+      const [status, setStatus] = React.useState('Idle');
+      const [statusTone, setStatusTone] = React.useState('info');
+      const [chatInput, setChatInput] = React.useState('');
+      const [messages, setMessages] = React.useState([]);
+      const [snackbar, setSnackbar] = React.useState(null);
+      const [cameraReady, setCameraReady] = React.useState(false);
+      const [peerReady, setPeerReady] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [signalingUrl, setSignalingUrl] = React.useState(() => {
+        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const host = window.location.host || 'localhost:8787';
+        return `${proto}://${host}/ws`;
+      });
+      const [wsReady, setWsReady] = React.useState(false);
+
+      const wsRef = React.useRef(null);
+      const roomRef = React.useRef('');
+      const pcRef = React.useRef(null);
+      const localStreamRef = React.useRef(null);
+      const localVideoRef = React.useRef(null);
+      const remoteVideoRef = React.useRef(null);
+      const initiatorRef = React.useRef(false);
+
+      function connectSignaling() {
+        if (!signalingUrl) {
+          setSnackbar('Set a signaling server URL first.');
+          return;
+        }
+        if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        try {
+          const ws = new WebSocket(signalingUrl);
+          ws.onopen = () => {
+            setWsReady(true);
+            logStatus('Connected to signaling server', 'success');
+          };
+          ws.onclose = () => {
+            setWsReady(false);
+          };
+          ws.onerror = () => {
+            setSnackbar('Signaling server error. Check URL or server status.');
+            setWsReady(false);
+          };
+          ws.onmessage = (event) => {
+            try {
+              const payload = JSON.parse(event.data);
+              if (payload && payload.code && payload.code !== roomRef.current) return;
+              handleSignal(payload);
+            } catch (err) {
+              console.warn('Bad signal payload', err);
+            }
+          };
+          wsRef.current = ws;
+        } catch (err) {
+          console.error('Failed to connect signaling', err);
+          setSnackbar('Failed to connect to signaling server.');
+        }
+      }
+
+      React.useEffect(() => {
+        roomRef.current = roomCode;
+      }, [roomCode]);
+
+      React.useEffect(() => {
+        connectSignaling();
+        return () => {
+          teardown();
+        };
+      }, [signalingUrl]);
+
+      const logStatus = (text, tone = 'info') => {
+        setStatus(text);
+        setStatusTone(tone);
+      };
+
+      const teardown = () => {
+        if (pcRef.current) {
+          pcRef.current.getSenders().forEach((s) => s.track && s.track.stop());
+          pcRef.current.onicecandidate = null;
+          pcRef.current.ontrack = null;
+          pcRef.current.close();
+          pcRef.current = null;
+        }
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach((t) => t.stop());
+          localStreamRef.current = null;
+        }
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = null;
+        }
+        if (wsRef.current) {
+          wsRef.current.close();
+          wsRef.current = null;
+        }
+        setWsReady(false);
+        initiatorRef.current = false;
+        setPeerReady(false);
+        setCameraReady(false);
+      };
+
+      const ensureCamera = async () => {
+        if (localStreamRef.current) return localStreamRef.current;
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+          localStreamRef.current = stream;
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
+          }
+          setCameraReady(true);
+          return stream;
+        } catch (err) {
+          console.error(err);
+          logStatus('Camera access blocked. Please allow video.', 'error');
+          setSnackbar('Unable to access camera. Check permissions.');
+          throw err;
+        }
+      };
+
+      const setupPeer = async (isInitiator) => {
+        initiatorRef.current = isInitiator;
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        });
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            sendSignal({ type: 'candidate', candidate: event.candidate });
+          }
+        };
+
+        pc.ontrack = (event) => {
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = event.streams[0];
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          const state = pc.connectionState;
+          if (state === 'connected') {
+            setPeerReady(true);
+            logStatus('Connected', 'success');
+          } else if (state === 'connecting') {
+            logStatus('Negotiating...', 'info');
+          } else if (state === 'failed') {
+            logStatus('Connection failed. Retry joining.', 'error');
+          }
+        };
+
+        const stream = await ensureCamera();
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+        pcRef.current = pc;
+        return pc;
+      };
+
+      const sendSignal = (payload, codeOverride) => {
+        const activeCode = codeOverride || roomRef.current;
+        if (!activeCode) return;
+        const envelope = { ...payload, code: activeCode };
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify(envelope));
+          return;
+        }
+        setSnackbar('Not connected to signaling server. Reconnecting...');
+        connectSignaling();
+      };
+
+      const startHost = async () => {
+        if (loading) return;
+        const generated = randomCode();
+        setRoomCode(generated);
+        roomRef.current = generated;
+        setRole('host');
+        setMessages([]);
+        setPeerReady(false);
+        setLoading(true);
+        logStatus('Creating room and warming camera...', 'info');
+        connectSignaling();
+        await setupPeer(true);
+        sendSignal({ type: 'host-ready', from: name || 'Host' }, generated);
+        logStatus('Room ready. Share the code and wait for join.', 'info');
+        setLoading(false);
+      };
+
+      const startGuest = async () => {
+        if (loading) return;
+        const target = roomCode.trim().toUpperCase();
+        if (!target) {
+          setSnackbar('Enter an invite code to join.');
+          return;
+        }
+        setRoomCode(target);
+        roomRef.current = target;
+        setRole('guest');
+        setMessages([]);
+        setPeerReady(false);
+        setLoading(true);
+        logStatus('Joining room ' + target + '...', 'info');
+        connectSignaling();
+        await setupPeer(false);
+        sendSignal({ type: 'join-ready', from: name || 'Guest' }, target);
+        setLoading(false);
+      };
+
+      const handleSignal = async (payload) => {
+        switch (payload.type) {
+          case 'host-ready':
+            if (role === 'guest') {
+              logStatus('Host is ready. Connecting...', 'info');
+            }
+            break;
+          case 'join-ready':
+            if (role === 'host' && initiatorRef.current) {
+              await createOffer();
+            }
+            break;
+          case 'offer':
+            if (role !== 'guest' || !pcRef.current) return;
+            await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            const answer = await pcRef.current.createAnswer();
+            await pcRef.current.setLocalDescription(answer);
+            sendSignal({ type: 'answer', sdp: answer });
+            logStatus('Answer sent. Finalizing...', 'info');
+            break;
+          case 'answer':
+            if (role !== 'host' || !pcRef.current) return;
+            await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            logStatus('Opponent answered. Finishing connection...', 'info');
+            break;
+          case 'candidate':
+            if (!pcRef.current) return;
+            try {
+              await pcRef.current.addIceCandidate(payload.candidate);
+            } catch (err) {
+              console.warn('ICE add failed', err);
+            }
+            break;
+          case 'chat':
+            setMessages((prev) => [...prev, payload.message]);
+            break;
+          default:
+            break;
+        }
+      };
+
+      const createOffer = async () => {
+        if (!pcRef.current) return;
+        logStatus('Opponent found. Creating offer...', 'info');
+        const offer = await pcRef.current.createOffer();
+        await pcRef.current.setLocalDescription(offer);
+        sendSignal({ type: 'offer', sdp: offer });
+      };
+
+      const sendChat = () => {
+        if (!chatInput.trim()) return;
+        const label = name || (role === 'host' ? 'Host' : role === 'guest' ? 'Guest' : 'You');
+        const message = {
+          from: label,
+          body: chatInput.trim(),
+          ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages((prev) => [...prev, message]);
+        sendSignal({ type: 'chat', message });
+        setChatInput('');
+      };
+
+      const reset = () => {
+        teardown();
+        setRole(null);
+        setRoomCode('');
+        roomRef.current = '';
+        setMessages([]);
+        setStatus('Idle');
+        setStatusTone('info');
+      };
+
+      const copyCode = async () => {
+        if (!roomRef.current) return;
+        try {
+          await navigator.clipboard.writeText(roomRef.current);
+          setSnackbar('Invite code copied');
+        } catch (err) {
+          setSnackbar('Copy failed. Copy manually: ' + roomRef.current);
+        }
+      };
+
+      return (
+        <ThemeProvider theme={theme}>
+          <CssBaseline />
+          <Container maxWidth="lg" sx={{ py: 4 }}>
+            <Stack spacing={3}>
+              <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
+                <Box>
+                  <Typography variant="h4">Camera Card Battle Operator</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Two hosts, mirrored cameras, quick invite codes, and in-room chat.
+                  </Typography>
+                </Box>
+                <StatusChip label={status} tone={statusTone} />
+              </Box>
+
+              <Paper className="glass" sx={{ p: 2.5 }}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={7}>
+                    <Stack spacing={2}>
+                      <Card className="video-shell">
+                        <CardContent sx={{ p: 1.5 }}>
+                          <Typography variant="subtitle2" sx={{ mb: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <span className="status-dot" style={{ background: peerReady ? '#5de2e7' : '#ff9f1c' }}></span>
+                            Opponent camera (mirrored)
+                          </Typography>
+                          <video className="remote-video" ref={remoteVideoRef} autoPlay playsInline />
+                          {!peerReady && (
+                            <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                              <Chip label="Waiting for opponent video..." color="default" variant="outlined" />
+                            </Box>
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      <Card className="video-shell">
+                        <CardContent sx={{ p: 1.5 }}>
+                          <Typography variant="subtitle2" sx={{ mb: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <span className="status-dot" style={{ background: cameraReady ? '#5de2e7' : '#ff9f1c' }}></span>
+                            Your camera (bottom seat)
+                          </Typography>
+                          <video ref={localVideoRef} autoPlay playsInline muted />
+                        </CardContent>
+                      </Card>
+                    </Stack>
+                  </Grid>
+
+                  <Grid item xs={12} md={5}>
+                    <Stack spacing={2}>
+                      <Paper variant="outlined" sx={{ p: 2, borderColor: 'rgba(255,255,255,0.08)' }}>
+                        <Stack spacing={1.5}>
+                          <Typography variant="h6">Session controls</Typography>
+                          <TextField label="Your name" value={name} onChange={(e) => setName(e.target.value)} size="small" fullWidth />
+                          <TextField
+                            label="Signaling server URL (ws:// or wss://)"
+                            value={signalingUrl}
+                            onChange={(e) => setSignalingUrl(e.target.value)}
+                            size="small"
+                            fullWidth
+                            helperText={'Example: ws://localhost:8787 (run the included signaling server)'}
+                          />
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                            <Button variant="contained" fullWidth color="primary" onClick={startHost} disabled={loading}>
+                              Host &amp; Generate Code
+                            </Button>
+                            <Button variant="outlined" fullWidth color="secondary" onClick={startGuest} disabled={loading}>
+                              Join by Code
+                            </Button>
+                          </Stack>
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
+                            <TextField label="Invite code" value={roomCode} onChange={(e) => setRoomCode(e.target.value.toUpperCase())} size="small" fullWidth />
+                            <Tooltip title="Copy invite code">
+                              <span>
+                                <IconButton onClick={copyCode} disabled={!roomCode}>
+                                  <span role="img" aria-label="copy">📋</span>
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Stack>
+                          <Divider />
+                          <Stack spacing={1}>
+                            <Typography variant="body2" color="text.secondary">
+                              1) Host generates a code and shares it. 2) Guest enters the code to join. 3) Allow camera access on both sides.
+                            </Typography>
+                            <Stack direction="row" spacing={1} flexWrap="wrap">
+                              <Chip label={role ? role.toUpperCase() : 'No role yet'} size="small" color="default" />
+                              <Chip label={cameraReady ? 'Camera ready' : 'Camera not ready'} size="small" color={cameraReady ? 'success' : 'warning'} />
+                              <Chip label={peerReady ? 'Peer connected' : 'Awaiting peer'} size="small" color={peerReady ? 'success' : 'warning'} />
+                              <Chip label={wsReady ? 'Signaling: connected' : 'Signaling: connecting'} size="small" color={wsReady ? 'success' : 'warning'} />
+                            </Stack>
+                          </Stack>
+                          <Stack direction="row" spacing={1}>
+                            <Button variant="text" color="inherit" onClick={reset}>Reset</Button>
+                          </Stack>
+                        </Stack>
+                      </Paper>
+
+                      <Paper variant="outlined" sx={{ p: 2, borderColor: 'rgba(255,255,255,0.08)', minHeight: 240 }}>
+                        <Stack spacing={1.5} sx={{ height: '100%' }}>
+                          <Stack direction="row" alignItems="center" justifyContent="space-between">
+                            <Typography variant="h6">Room chat</Typography>
+                            <Chip label={messages.length + ' message' + (messages.length === 1 ? '' : 's')} size="small" />
+                          </Stack>
+                          <Paper variant="outlined" sx={{ flex: 1, maxHeight: 240, overflow: 'auto', p: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
+                            {messages.length === 0 && (
+                              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 6 }}>
+                                No messages yet. Say hi to your opponent!
+                              </Typography>
+                            )}
+                            <List dense>
+                              {messages.map((msg, idx) => (
+                                <ListItem key={idx} alignItems="flex-start" sx={{ py: 0.5 }}>
+                                  <Avatar sx={{ width: 30, height: 30, mr: 1, fontSize: 14, bgcolor: (msg.from || '').toLowerCase() === (name || role || '').toLowerCase() ? 'primary.main' : 'secondary.main' }}>
+                                    {((msg.from || '?')[0] || '?').toUpperCase()}
+                                  </Avatar>
+                                  <ListItemText
+                                    primary={
+                                      <Stack direction="row" justifyContent="space-between" alignItems="center">
+                                        <Typography variant="subtitle2">{msg.from}</Typography>
+                                        <Typography variant="caption" color="text.secondary">{msg.ts}</Typography>
+                                      </Stack>
+                                    }
+                                    secondary={<Typography variant="body2" color="text.primary">{msg.body}</Typography>}
+                                  />
+                                </ListItem>
+                              ))}
+                            </List>
+                          </Paper>
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                            <TextField
+                              label="Type a message"
+                              value={chatInput}
+                              onChange={(e) => setChatInput(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && sendChat()}
+                              size="small"
+                              fullWidth
+                            />
+                            <Button variant="contained" onClick={sendChat} color="secondary">Send</Button>
+                          </Stack>
+                        </Stack>
+                      </Paper>
+
+                      <Alert severity="info" variant="outlined">
+                        Signaling is WebSocket-only. Run the included <code>signaling-server.js</code> (or deploy to Vercel) and point the URL above to it. Both players must use the same signaling server and invite code.
+                      </Alert>
+                    </Stack>
+                  </Grid>
+                </Grid>
+              </Paper>
+            </Stack>
+          </Container>
+          <Snackbar
+            open={Boolean(snackbar)}
+            autoHideDuration={3200}
+            onClose={() => setSnackbar(null)}
+            message={snackbar}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          />
+        </ThemeProvider>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+  </script>
+</body>
+</html>
